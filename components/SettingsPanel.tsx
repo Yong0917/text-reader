@@ -4,14 +4,16 @@ import { Settings, Theme, FontFamily, THEME_STYLES } from '@/lib/settings';
 
 interface SettingsPanelProps {
   settings: Settings;
+  isApplying: boolean;
   onSettingsChange: (settings: Settings) => void;
   onClose: () => void;
 }
 
-export default function SettingsPanel({ settings, onSettingsChange, onClose }: SettingsPanelProps) {
+export default function SettingsPanel({ settings, isApplying, onSettingsChange, onClose }: SettingsPanelProps) {
   const theme = THEME_STYLES[settings.theme];
 
   const update = (partial: Partial<Settings>) => {
+    if (isApplying) return;
     onSettingsChange({ ...settings, ...partial });
   };
 
@@ -41,6 +43,9 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
         <div className="px-6 pb-12 pt-3 space-y-7">
           {/* 타이틀 */}
           <h2 className={`text-lg font-semibold tracking-tight ${theme.text}`}>읽기 설정</h2>
+          {isApplying ? (
+            <p className={`-mt-4 text-xs ${theme.subtext}`}>설정을 적용하는 동안 잠시 기다려 주세요</p>
+          ) : null}
 
           {/* ── 글자 크기 ── */}
           <div className="space-y-3">
@@ -51,7 +56,8 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
             <div className="flex items-center gap-3">
               <button
                 onClick={() => update({ fontSize: Math.max(12, settings.fontSize - 1) })}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform`}
+                disabled={isApplying}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform disabled:opacity-40 disabled:active:scale-100`}
               >−</button>
               <div className="flex-1 relative">
                 <div className="absolute inset-y-1/2 left-0 right-0 h-[3px] -translate-y-1/2 rounded-full" style={{ background: rangeTrack }} />
@@ -63,13 +69,15 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
                   type="range" min={12} max={28}
                   value={settings.fontSize}
                   onChange={(e) => update({ fontSize: Number(e.target.value) })}
-                  className="relative w-full opacity-0 cursor-pointer h-6"
+                  disabled={isApplying}
+                  className="relative w-full opacity-0 cursor-pointer h-6 disabled:cursor-default"
                   style={{ background: 'transparent' }}
                 />
               </div>
               <button
                 onClick={() => update({ fontSize: Math.min(28, settings.fontSize + 1) })}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform`}
+                disabled={isApplying}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform disabled:opacity-40 disabled:active:scale-100`}
               >+</button>
             </div>
           </div>
@@ -83,7 +91,8 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
             <div className="flex items-center gap-3">
               <button
                 onClick={() => update({ lineHeight: Math.max(1.2, Number((settings.lineHeight - 0.1).toFixed(1))) })}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform`}
+                disabled={isApplying}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform disabled:opacity-40 disabled:active:scale-100`}
               >−</button>
               <div className="flex-1 relative">
                 <div className="absolute inset-y-1/2 left-0 right-0 h-[3px] -translate-y-1/2 rounded-full" style={{ background: rangeTrack }} />
@@ -95,12 +104,14 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
                   type="range" min={1.2} max={2.5} step={0.1}
                   value={settings.lineHeight}
                   onChange={(e) => update({ lineHeight: Number(e.target.value) })}
-                  className="relative w-full opacity-0 cursor-pointer h-6"
+                  disabled={isApplying}
+                  className="relative w-full opacity-0 cursor-pointer h-6 disabled:cursor-default"
                 />
               </div>
               <button
                 onClick={() => update({ lineHeight: Math.min(2.5, Number((settings.lineHeight + 0.1).toFixed(1))) })}
-                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform`}
+                disabled={isApplying}
+                className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg font-light border ${theme.border} ${theme.text} active:scale-90 transition-transform disabled:opacity-40 disabled:active:scale-100`}
               >+</button>
             </div>
           </div>
@@ -115,11 +126,12 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
                   <button
                     key={t.value}
                     onClick={() => update({ theme: t.value })}
+                    disabled={isApplying}
                     className={`flex-1 flex flex-col items-center gap-2 py-3.5 rounded-2xl border-2 transition-all active:scale-95 ${
                       active
                         ? 'border-[#2c5f4e]'
                         : `${theme.border}`
-                    }`}
+                    } disabled:opacity-50 disabled:active:scale-100`}
                   >
                     <div className={`w-6 h-6 rounded-full ${t.dot}`} />
                     <span className={`text-xs font-medium ${active ? theme.accentText : theme.subtext}`}>
@@ -141,9 +153,10 @@ export default function SettingsPanel({ settings, onSettingsChange, onClose }: S
                   <button
                     key={f.value}
                     onClick={() => update({ fontFamily: f.value })}
+                    disabled={isApplying}
                     className={`flex-1 py-3 flex flex-col items-center gap-0.5 transition-all ${
                       i === 0 ? '' : `border-l ${theme.border}`
-                    } ${active ? 'bg-[#2c5f4e]' : ''}`}
+                    } ${active ? 'bg-[#2c5f4e]' : ''} disabled:opacity-50`}
                   >
                     <span
                       className={`text-sm font-medium ${active ? 'text-white' : theme.text}`}

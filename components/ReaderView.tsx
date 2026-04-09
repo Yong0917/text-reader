@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, useDeferredValue } from 'react';
 import {
   BookFile,
   Bookmark,
@@ -14,10 +14,12 @@ import { Settings, THEME_STYLES } from '@/lib/settings';
 import SettingsPanel from './SettingsPanel';
 import SearchPanel from './SearchPanel';
 import BookmarkPanel from './BookmarkPanel';
+import LoadingOverlay from './LoadingOverlay';
 
 interface ReaderViewProps {
   book: BookFile;
   settings: Settings;
+  isSettingsPending: boolean;
   onSettingsChange: (s: Settings) => void;
   onBack: () => void;
 }
@@ -65,11 +67,14 @@ function ToolBtn({ onClick, children, className = '' }: {
   );
 }
 
-export default function ReaderView({ book, settings, onSettingsChange, onBack }: ReaderViewProps) {
+export default function ReaderView({ book, settings, isSettingsPending, onSettingsChange, onBack }: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const matchRefs = useRef<(HTMLElement | null)[]>([]);
+
+  const deferredSettings = useDeferredValue(settings);
+  const isApplyingSettings = isSettingsPending || deferredSettings !== settings;
 
   const [showSettings, setShowSettings] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -84,7 +89,7 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
   const [currentScrollTop, setCurrentScrollTop] = useState(0);
   const [scrollHeight, setScrollHeight] = useState(0);
 
-  const theme = THEME_STYLES[settings.theme];
+  const theme = THEME_STYLES[deferredSettings.theme];
   const paragraphs = useMemo(() => book.content.split(/\n+/).filter((p) => p.trim()), [book.content]);
 
   const matches = useMemo(() => {
@@ -182,7 +187,7 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
     if (scrollRef.current) scrollRef.current.scrollTop = scrollTop;
   }, []);
 
-  const fontStyle = settings.fontFamily === 'serif'
+  const fontStyle = deferredSettings.fontFamily === 'serif'
     ? { fontFamily: 'var(--font-reading)' }
     : {};
 
@@ -190,6 +195,18 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
 
   return (
     <div className={`fixed inset-0 flex flex-col ${theme.bg}`} style={{ '--reader-bg': theme.bgVar } as React.CSSProperties}>
+      {isApplyingSettings ? (
+        <>
+          <div className="fixed top-0 left-0 right-0 z-[110] h-1 overflow-hidden bg-black/5">
+            <div className="loading-bar h-full w-1/4 bg-[#2c5f4e]" />
+          </div>
+          <LoadingOverlay
+            label="읽기 설정을 적용하는 중"
+            detail="대용량 텍스트를 다시 배치하고 있습니다."
+            dimmed={false}
+          />
+        </>
+      ) : null}
 
       {/* 세로 진행률 표시줄 (오른쪽 엣지) */}
       <div className="fixed right-0 top-0 bottom-0 z-20 w-[2px] pointer-events-none">
@@ -198,7 +215,7 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
           className="absolute top-0 left-0 right-0 transition-all duration-500"
           style={{
             height: `${readProgress}%`,
-            background: settings.theme === 'dark' ? '#4a8f7a' : '#2c5f4e',
+            background: deferredSettings.theme === 'dark' ? '#4a8f7a' : '#2c5f4e',
             opacity: 0.5,
           }}
         />
@@ -259,8 +276,8 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
                 ref={(el) => { matchRefs.current[i] = el; }}
                 className={`${theme.text} mb-5`}
                 style={{
-                  fontSize: `${settings.fontSize}px`,
-                  lineHeight: settings.lineHeight,
+                  fontSize: `${deferredSettings.fontSize}px`,
+                  lineHeight: deferredSettings.lineHeight,
                   ...fontStyle,
                 }}
               >
@@ -274,7 +291,7 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
           {/* 완독 표시 */}
           {readProgress >= 98 && (
             <div className={`flex flex-col items-center gap-2 py-8 ${theme.subtext}`}>
-              <div className={`w-8 h-px ${settings.theme === 'dark' ? 'bg-[#3a3530]' : 'bg-[#e0d8cc]'}`} />
+              <div className={`w-8 h-px ${deferredSettings.theme === 'dark' ? 'bg-[#3a3530]' : 'bg-[#e0d8cc]'}`} />
               <p className="text-xs">끝</p>
             </div>
           )}
@@ -326,7 +343,12 @@ export default function ReaderView({ book, settings, onSettingsChange, onBack }:
       </div>
 
       {showSettings && (
-        <SettingsPanel settings={settings} onSettingsChange={onSettingsChange} onClose={() => setShowSettings(false)} />
+        <SettingsPanel
+          settings={settings}
+          isApplying={isApplyingSettings}
+          onSettingsChange={onSettingsChange}
+          onClose={() => setShowSettings(false)}
+        />
       )}
       {showBookmarks && (
         <BookmarkPanel
