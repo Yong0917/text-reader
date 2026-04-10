@@ -8,24 +8,23 @@ interface PdfReaderViewProps {
   onBack: () => void;
 }
 
-interface PageEntry {
-  index: number;       // 1-based
-  rendered: boolean;
-}
-
 export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [totalPages, setTotalPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [showBar, setShowBar] = useState(true);
+  const [zoomLevel, setZoomLevel] = useState(1.0);
+  const zoomRef = useRef(1.0);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pdfDocRef = useRef<any>(null);
   const renderingRef = useRef<Set<number>>(new Set());
   const initialScrollDone = useRef(false);
+  const pinchActiveRef = useRef(false);
 
   // PDF 로드 및 페이지 렌더링
   useEffect(() => {
@@ -46,11 +45,9 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
       setTotalPages(pdf.numPages);
       canvasRefs.current = new Array(pdf.numPages).fill(null);
 
-      // 초기 스크롤 위치 복원
       const prog = await getProgress(book.id);
       if (prog?.scrollRatio && !initialScrollDone.current && scrollRef.current) {
-        // 렌더링 후 복원 (useEffect에서 처리)
-        initialScrollDone.current = false; // 렌더링 대기
+        initialScrollDone.current = false;
       }
     }
 
@@ -59,13 +56,12 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.pdfData]);
 
-  // 초기 스크롤 복원 (totalPages 세팅 후)
+  // 초기 스크롤 복원
   useEffect(() => {
     if (!totalPages || initialScrollDone.current) return;
 
     getProgress(book.id).then((prog) => {
       if (!prog?.scrollRatio || !scrollRef.current) return;
-      // 약간의 지연 후 복원 (DOM 렌더링 대기)
       setTimeout(() => {
         if (!scrollRef.current) return;
         const maxScroll = scrollRef.current.scrollHeight - scrollRef.current.clientHeight;
@@ -80,7 +76,6 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
     if (renderingRef.current.has(pageNum)) return;
     const canvas = canvasRefs.current[pageNum - 1];
     if (!canvas) return;
-    // 이미 렌더링된 경우 스킵
     if (canvas.dataset.rendered === 'true') return;
 
     renderingRef.current.add(pageNum);
@@ -89,7 +84,7 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
       const dpr = window.devicePixelRatio || 1;
       const containerWidth = scrollRef.current?.clientWidth ?? window.innerWidth;
       const viewport = page.getViewport({ scale: 1 });
-      const scale = (containerWidth / viewport.width) * dpr;
+      const scale = (containerWidth / viewport.width) * dpr * zoomRef.current;
       const scaledViewport = page.getViewport({ scale });
 
       canvas.width = scaledViewport.width;
@@ -102,10 +97,35 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
 
       await page.render({ canvasContext: ctx, viewport: scaledViewport }).promise;
       canvas.dataset.rendered = 'true';
+      canvas.dataset.renderedZoom = String(zoomRef.current);
     } finally {
       renderingRef.current.delete(pageNum);
     }
   }, []);
+
+  // 줌 변경 시 모든 캔버스 재렌더링
+  useEffect(() => {
+    if (!totalPages) return;
+
+    canvasRefs.current.forEach((canvas) => {
+      if (canvas) canvas.dataset.rendered = 'false';
+    });
+    renderingRef.current.clear();
+
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+
+    for (let i = 1; i <= totalPages; i++) {
+      const container = scrollEl.querySelector(`[data-page="${i}"]`);
+      if (!container) continue;
+      const rect = container.getBoundingClientRect();
+      if (rect.bottom > -200 && rect.top < window.innerHeight + 200) {
+        renderPage(i);
+        if (i > 1) renderPage(i - 1);
+        if (i < totalPages) renderPage(i + 1);
+      }
+    }
+  }, [zoomLevel, totalPages, renderPage]);
 
   // Intersection Observer로 화면에 보이는 페이지만 렌더링
   useEffect(() => {
@@ -118,7 +138,6 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
             const pageNum = parseInt((entry.target as HTMLElement).dataset.page ?? '0', 10);
             if (pageNum > 0) {
               renderPage(pageNum);
-              // 인접 페이지 미리 렌더링
               if (pageNum > 1) renderPage(pageNum - 1);
               if (pageNum < totalPages) renderPage(pageNum + 1);
             }
@@ -133,6 +152,78 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
 
     return () => observer.disconnect();
   }, [totalPages, renderPage]);
+
+  // 핀치 줌 터치 이벤트
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    let startDist: number | null = null;
+    let startZoom = 1;
+    let currentPinchZoom = 1;
+
+    const getDistance = (touches: TouchList) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        startDist = getDistance(e.touches);
+        startZoom = zoomRef.current;
+        currentPinchZoom = startZoom;
+        pinchActiveRef.current = true;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches.length === 2 && startDist !== null) {
+        e.preventDefault();
+        const dist = getDistance(e.touches);
+        const ratio = dist / startDist;
+        currentPinchZoom = Math.min(4, Math.max(0.5, startZoom * ratio));
+        zoomRef.current = currentPinchZoom;
+        // CSS transform으로 즉각적인 시각 피드백
+        if (contentRef.current) {
+          const relativeScale = currentPinchZoom / startZoom;
+          contentRef.current.style.transform = `scale(${relativeScale})`;
+          contentRef.current.style.transformOrigin = 'top center';
+        }
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2 && startDist !== null) {
+        startDist = null;
+        // CSS transform 제거 후 실제 스케일로 재렌더링
+        if (contentRef.current) {
+          contentRef.current.style.transform = '';
+          contentRef.current.style.transformOrigin = '';
+        }
+        const snapped = Math.round(currentPinchZoom * 10) / 10;
+        zoomRef.current = snapped;
+        setZoomLevel(snapped);
+        setTimeout(() => { pinchActiveRef.current = false; }, 100);
+      }
+    };
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: false });
+    el.addEventListener('touchend', onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('touchend', onTouchEnd);
+    };
+  }, []);
+
+  const changeZoom = useCallback((delta: number) => {
+    const newZoom = Math.round(Math.min(4, Math.max(0.5, zoomRef.current + delta)) * 10) / 10;
+    zoomRef.current = newZoom;
+    setZoomLevel(newZoom);
+  }, []);
 
   const persistProgress = useCallback(() => {
     if (!scrollRef.current || !totalPages) return;
@@ -150,7 +241,6 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
     if (!scrollRef.current || !totalPages) return;
     const el = scrollRef.current;
 
-    // 현재 페이지 계산
     const pageHeight = el.scrollHeight / totalPages;
     const page = Math.min(totalPages, Math.max(1, Math.floor(el.scrollTop / pageHeight) + 1));
     setCurrentPage(page);
@@ -159,6 +249,7 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   }, [totalPages, persistProgress]);
 
   const handleTap = useCallback(() => {
+    if (pinchActiveRef.current) return;
     setShowBar((prev) => !prev);
     if (barTimer.current) clearTimeout(barTimer.current);
     barTimer.current = setTimeout(() => setShowBar(false), 3000);
@@ -185,7 +276,6 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   const handleBackClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     persistProgress();
-    // saveProgress가 debounce되어 있으므로 즉시 저장
     if (scrollRef.current && totalPages) {
       const el = scrollRef.current;
       const maxScroll = Math.max(el.scrollHeight - el.clientHeight, 0);
@@ -196,6 +286,7 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   }, [book.id, onBack, persistProgress, totalPages]);
 
   const readProgress = totalPages > 0 ? ((currentPage - 1) / Math.max(totalPages - 1, 1)) * 100 : 0;
+  const zoomPercent = Math.round(zoomLevel * 100);
 
   return (
     <div className="fixed inset-0 flex flex-col bg-[#404040]">
@@ -227,6 +318,30 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
           <p className="flex-1 text-sm font-medium truncate px-1 text-white/80">
             {book.name.replace(/\.[^/.]+$/, '')}
           </p>
+
+          {/* 줌 컨트롤 */}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={(e) => { e.stopPropagation(); changeZoom(-0.25); }}
+              className="p-2 rounded-lg active:scale-90 transition-transform text-white/70 hover:text-white/90"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14" />
+              </svg>
+            </button>
+            <span className="text-xs tabular-nums text-white/50 w-9 text-center">
+              {zoomPercent}%
+            </span>
+            <button
+              onClick={(e) => { e.stopPropagation(); changeZoom(0.25); }}
+              className="p-2 rounded-lg active:scale-90 transition-transform text-white/70 hover:text-white/90"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-4 h-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
+
           <span className="text-xs tabular-nums text-white/50 mr-1">
             {totalPages > 0 ? `${currentPage} / ${totalPages}` : '로딩 중...'}
           </span>
@@ -236,22 +351,21 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
       {/* PDF 스크롤 영역 */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto"
+        className="flex-1 overflow-auto"
         onScroll={handleScroll}
         onClick={handleTap}
       >
-        <div className="flex flex-col items-center gap-2 py-4 pt-16">
+        <div ref={contentRef} className="flex flex-col items-center gap-2 py-4 pt-16">
           {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
             <div
               key={pageNum}
               data-page={pageNum}
-              className="w-full flex justify-center"
-              style={{ maxWidth: '100vw' }}
+              className="flex justify-center"
             >
               <canvas
                 ref={(el) => { canvasRefs.current[pageNum - 1] = el; }}
                 className="shadow-lg"
-                style={{ display: 'block', maxWidth: '100%' }}
+                style={{ display: 'block' }}
               />
             </div>
           ))}
