@@ -105,7 +105,7 @@ export default function ReaderView({
         : 0,
   });
 
-  const persistProgress = useCallback(() => {
+  const persistProgress = useCallback(async () => {
     if (!scrollRef.current) return;
 
     const { scrollTop, scrollHeight: sh } = scrollRef.current;
@@ -118,7 +118,7 @@ export default function ReaderView({
       ? clampRatio((scrollTop - firstVisible.start) / Math.max(firstVisible.size, 1))
       : 0;
 
-    void saveProgress(book.id, scrollTop, sh, firstVisible?.index, measuredAvg, paraOffsetRatio);
+    await saveProgress(book.id, scrollTop, sh, firstVisible?.index, measuredAvg, paraOffsetRatio);
   }, [book.id, estimatedHeight, paragraphs.length, virtualizer]);
 
   // initialOffset is only an estimate. After measurement, restore to the exact
@@ -188,7 +188,7 @@ export default function ReaderView({
     setReadProgress(Math.min(100, Math.max(0, (scrollTop / (sh - window.innerHeight)) * 100)));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      persistProgress();
+      void persistProgress();
     }, 500);
   }, [persistProgress]);
 
@@ -204,12 +204,12 @@ export default function ReaderView({
     const handleVisibilitySave = () => {
       if (document.visibilityState === 'hidden') {
         if (saveTimer.current) clearTimeout(saveTimer.current);
-        persistProgress();
+        void persistProgress();
       }
     };
     const handlePageHide = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      persistProgress();
+      void persistProgress();
     };
 
     document.addEventListener('visibilitychange', handleVisibilitySave);
@@ -220,14 +220,14 @@ export default function ReaderView({
       window.removeEventListener('pagehide', handlePageHide);
       if (barTimer.current) clearTimeout(barTimer.current);
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      persistProgress();
+      void persistProgress();
     };
   }, [persistProgress]);
 
-  const handleBackClick = useCallback((e: React.MouseEvent) => {
+  const handleBackClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    persistProgress();
+    await persistProgress();
     onBack();
   }, [onBack, persistProgress]);
 
