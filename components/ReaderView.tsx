@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   BookFile,
   Bookmark,
@@ -51,11 +52,14 @@ function ToolBtn({ onClick, children, className = '' }: {
   );
 }
 
+// pt-20 = 80px, pb-32 = 128px (at 16px base)
+const PADDING_TOP = 80;
+const PADDING_BOTTOM = 128;
+
 export default function ReaderView({ book, settings, onBack }: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const paraRefs = useRef<(HTMLElement | null)[]>([]);
 
   const [showSearch, setShowSearch] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
@@ -70,29 +74,48 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
   const theme = THEME_STYLES[settings.theme];
   const paragraphs = useMemo(() => book.content.split(/\n+/).filter((p) => p.trim()), [book.content]);
 
-  const matches = useMemo(() => {
-    if (!searchQuery) return [];
+  // +1 for the footer item
+  const virtualizer = useVirtualizer({
+    count: paragraphs.length + 1,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 80,
+    overscan: 30,
+    paddingStart: PADDING_TOP,
+    paddingEnd: PADDING_BOTTOM,
+  });
+
+  // Use Set for O(1) match lookup during rendering
+  const matchIndices = useMemo(() => {
+    if (!searchQuery) return [] as { paraIndex: number }[];
     const q = searchQuery.toLowerCase();
     return paragraphs
       .map((para, i) => para.toLowerCase().includes(q) ? { paraIndex: i } : null)
       .filter((v): v is { paraIndex: number } => v !== null);
   }, [searchQuery, paragraphs]);
 
+  const matchSet = useMemo(() => new Set(matchIndices.map((m) => m.paraIndex)), [matchIndices]);
+
   useEffect(() => { setCurrentMatchIndex(0); }, [searchQuery]);
 
+  // Jump to search result
   useEffect(() => {
-    if (matches.length === 0) return;
-    const el = paraRefs.current[matches[currentMatchIndex]?.paraIndex];
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [currentMatchIndex, matches]);
+    if (matchIndices.length === 0) return;
+    const targetIdx = matchIndices[currentMatchIndex]?.paraIndex;
+    if (targetIdx !== undefined) {
+      virtualizer.scrollToIndex(targetIdx, { align: 'center' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentMatchIndex, matchIndices]);
 
+  // Restore scroll position on mount
   useEffect(() => {
     getProgress(book.id).then((prog) => {
-      if (prog && scrollRef.current) {
-        scrollRef.current.scrollTop = prog.scrollTop;
-        setScrollHeight(prog.scrollHeight);
-        if (prog.scrollHeight > 0) {
-          setReadProgress(Math.min(100, (prog.scrollTop / (prog.scrollHeight - window.innerHeight)) * 100));
+      if (prog && prog.scrollHeight > 0) {
+        const ratio = prog.scrollTop / prog.scrollHeight;
+        setReadProgress(Math.min(100, ratio * 100));
+        const targetIndex = Math.round(ratio * paragraphs.length);
+        if (targetIndex > 0) {
+          virtualizer.scrollToIndex(targetIndex, { align: 'start' });
         }
       }
     });
@@ -132,27 +155,29 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
   const handleAddBookmark = useCallback(async () => {
     if (!scrollRef.current) return;
     const scrollTop = scrollRef.current.scrollTop;
+    const visibleItems = virtualizer.getVirtualItems();
     let label = '';
-    for (const ref of paraRefs.current) {
-      if (!ref) continue;
-      const rect = ref.getBoundingClientRect();
-      if (rect.top >= 0 && rect.top < window.innerHeight) {
-        label = ref.textContent?.trim().slice(0, 60) ?? '';
+    for (const vItem of visibleItems) {
+      if (vItem.index >= paragraphs.length) continue;
+      if (vItem.start >= scrollTop) {
+        label = paragraphs[vItem.index]?.trim().slice(0, 60) ?? '';
         break;
       }
     }
-    if (!label) label = `${Math.round((scrollTop / scrollHeight) * 100)}% 위치`;
+    if (!label) label = `${Math.round((scrollTop / scrollRef.current.scrollHeight) * 100)}% 위치`;
     await addBookmark(book.id, scrollTop, label);
     await loadBookmarks();
-  }, [book.id, scrollHeight, loadBookmarks]);
+  }, [book.id, virtualizer, paragraphs, loadBookmarks]);
 
   const handleDeleteBookmark = useCallback(async (id: string) => {
     await removeBookmark(id);
     await loadBookmarks();
   }, [loadBookmarks]);
 
-  const handleJumpToBookmark = useCallback((scrollTop: number) => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollTop;
+  const handleJumpToBookmark = useCallback((bookmarkScrollTop: number) => {
+    if (!scrollRef.current) return;
+    // Saved scrollTop is a ratio-based absolute offset in the virtual space
+    scrollRef.current.scrollTop = bookmarkScrollTop;
   }, []);
 
   const iconColor = theme.text;
@@ -179,10 +204,10 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
           settings={settings}
           query={searchQuery}
           onQueryChange={setSearchQuery}
-          totalMatches={matches.length}
+          totalMatches={matchIndices.length}
           currentMatch={currentMatchIndex}
-          onPrev={() => setCurrentMatchIndex((i) => (i - 1 + matches.length) % matches.length)}
-          onNext={() => setCurrentMatchIndex((i) => (i + 1) % matches.length)}
+          onPrev={() => setCurrentMatchIndex((i) => (i - 1 + matchIndices.length) % matchIndices.length)}
+          onNext={() => setCurrentMatchIndex((i) => (i + 1) % matchIndices.length)}
           onClose={() => { setShowSearch(false); setSearchQuery(''); }}
         />
       )}
@@ -222,15 +247,55 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
           '--reader-font-family': settings.fontFamily === 'serif' ? 'var(--font-reading)' : 'inherit',
         } as React.CSSProperties}
       >
-        <div className="px-6 pt-20 pb-32 max-w-xl mx-auto">
-          {paragraphs.map((para, i) => {
-            const isMatchPara = matches.some((m) => m.paraIndex === i);
-            const isCurrentPara = matches[currentMatchIndex]?.paraIndex === i;
+        <div
+          className="max-w-xl mx-auto px-6 relative"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualizer.getVirtualItems().map((vItem) => {
+            // Footer item
+            if (vItem.index === paragraphs.length) {
+              return (
+                <div
+                  key={vItem.key}
+                  ref={virtualizer.measureElement}
+                  data-index={vItem.index}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${vItem.start}px)`,
+                  }}
+                >
+                  {readProgress >= 98 && (
+                    <div className={`flex flex-col items-center gap-2 py-8 ${theme.subtext}`}>
+                      <div className={`w-8 h-px ${settings.theme === 'dark' ? 'bg-[#3a3530]' : 'bg-[#e0d8cc]'}`} />
+                      <p className="text-xs">끝</p>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            const para = paragraphs[vItem.index];
+            const isMatchPara = matchSet.has(vItem.index);
+            const isCurrentPara = matchIndices[currentMatchIndex]?.paraIndex === vItem.index;
+
             return (
               <p
-                key={i}
-                ref={(el) => { paraRefs.current[i] = el; }}
+                key={vItem.key}
+                ref={virtualizer.measureElement}
+                data-index={vItem.index}
                 className={`reader-para ${theme.text}`}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: '1.5rem', // px-6
+                  right: '1.5rem',
+                  transform: `translateY(${vItem.start}px)`,
+                  margin: 0,
+                  paddingBottom: '1.25rem', // replaces reader-para margin-bottom for measurable spacing
+                }}
               >
                 {isMatchPara
                   ? <HighlightedText text={para} query={searchQuery} isCurrent={isCurrentPara} />
@@ -238,13 +303,6 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
               </p>
             );
           })}
-
-          {readProgress >= 98 && (
-            <div className={`flex flex-col items-center gap-2 py-8 ${theme.subtext}`}>
-              <div className={`w-8 h-px ${settings.theme === 'dark' ? 'bg-[#3a3530]' : 'bg-[#e0d8cc]'}`} />
-              <p className="text-xs">끝</p>
-            </div>
-          )}
         </div>
       </div>
 

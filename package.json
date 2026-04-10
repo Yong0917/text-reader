@@ -10,6 +10,7 @@
     "generate:icons": "node scripts/generate-icons.mjs"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.13.23",
     "idb": "^8.0.3",
     "jszip": "^3.10.1",
     "next": "16.2.3",
