@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback, useTransition } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   getAllBooks,
   saveBook,
-  getBook,
   deleteBook,
   getProgress,
   updateBookLastRead,
@@ -12,29 +11,29 @@ import {
 } from '@/lib/db';
 import { getSettings, saveSettings, Settings } from '@/lib/settings';
 import LibraryView from '@/components/LibraryView';
+import DetailView from '@/components/DetailView';
 import ReaderView from '@/components/ReaderView';
+import SettingsPanel from '@/components/SettingsPanel';
 import LoadingOverlay from '@/components/LoadingOverlay';
 
-interface BusyState {
-  label: string;
-  detail: string;
-}
+type View = 'library' | 'detail' | 'reader';
 
 export default function Home() {
   const [books, setBooks] = useState<BookFile[]>([]);
   const [progressMap, setProgressMap] = useState<Record<string, number>>({});
-  const [currentBook, setCurrentBook] = useState<BookFile | null>(null);
   const [settings, setSettings] = useState<Settings>(getSettings());
   const [isLoading, setIsLoading] = useState(true);
-  const [busyState, setBusyState] = useState<BusyState | null>(null);
-  const [isSettingsPending, startSettingsTransition] = useTransition();
+  const [isBusy, setIsBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState('');
 
-  // 책 목록 불러오기
+  const [view, setView] = useState<View>('library');
+  const [selectedBook, setSelectedBook] = useState<BookFile | null>(null);
+  const [showLibrarySettings, setShowLibrarySettings] = useState(false);
+
   const loadBooks = useCallback(async () => {
     const all = await getAllBooks();
     setBooks(all);
 
-    // 진행률 계산
     const map: Record<string, number> = {};
     await Promise.all(
       all.map(async (book) => {
@@ -56,10 +55,8 @@ export default function Home() {
 
   // 파일 추가
   const handleFilesSelected = useCallback(async (files: FileList) => {
-    setBusyState({
-      label: '파일을 추가하는 중',
-      detail: '대용량 텍스트를 분석하고 서재에 저장하고 있습니다.',
-    });
+    setIsBusy(true);
+    setBusyLabel('파일을 추가하는 중');
     try {
       for (const file of Array.from(files)) {
         await saveBook(file);
@@ -68,46 +65,58 @@ export default function Home() {
       alert(`파일 처리 중 오류가 발생했습니다:\n${(err as Error).message}`);
     } finally {
       await loadBooks();
-      setBusyState(null);
+      setIsBusy(false);
     }
   }, [loadBooks]);
 
-  // 책 열기
-  const handleOpen = useCallback(async (id: string) => {
-    setBusyState({
-      label: '책을 여는 중',
-      detail: '저장된 텍스트와 읽던 위치를 불러오고 있습니다.',
-    });
-    try {
-      const book = await getBook(id);
-      if (book) {
-        await updateBookLastRead(id);
-        setCurrentBook(book);
-      }
-    } finally {
-      setBusyState(null);
-    }
+  // 책 카드 탭 → 상세 페이지
+  const handleSelectBook = useCallback((id: string) => {
+    const book = books.find((b) => b.id === id);
+    if (!book) return;
+    setSelectedBook(book);
+    setView('detail');
+  }, [books]);
+
+  // 상세 → 리더
+  const handleOpenReader = useCallback(async () => {
+    if (!selectedBook) return;
+    await updateBookLastRead(selectedBook.id);
+    setView('reader');
+  }, [selectedBook]);
+
+  // 뒤로가기 (리더/상세 → 라이브러리)
+  const handleBack = useCallback(() => {
+    setView('library');
+    setSelectedBook(null);
+    loadBooks();
+  }, [loadBooks]);
+
+  // 상세 → 라이브러리
+  const handleDetailBack = useCallback(() => {
+    setView('library');
+    setSelectedBook(null);
   }, []);
 
-  // 책 삭제
-  const handleDelete = useCallback(async (id: string) => {
+  // 책 삭제 (라이브러리 카드에서)
+  const handleDeleteFromLibrary = useCallback(async (id: string) => {
     await deleteBook(id);
     await loadBooks();
   }, [loadBooks]);
 
+  // 책 삭제 (상세 페이지에서)
+  const handleDeleteFromDetail = useCallback(async () => {
+    if (!selectedBook) return;
+    await deleteBook(selectedBook.id);
+    setView('library');
+    setSelectedBook(null);
+    await loadBooks();
+  }, [selectedBook, loadBooks]);
+
   // 설정 변경
   const handleSettingsChange = useCallback((newSettings: Settings) => {
     saveSettings(newSettings);
-    startSettingsTransition(() => {
-      setSettings(newSettings);
-    });
-  }, [startSettingsTransition]);
-
-  // 뒤로가기
-  const handleBack = useCallback(() => {
-    setCurrentBook(null);
-    loadBooks();
-  }, [loadBooks]);
+    setSettings(newSettings);
+  }, []);
 
   if (isLoading) {
     return (
@@ -120,18 +129,24 @@ export default function Home() {
     );
   }
 
-  if (currentBook) {
+  if (view === 'reader' && selectedBook) {
     return (
-      <>
-        <ReaderView
-          book={currentBook}
-          settings={settings}
-          isSettingsPending={isSettingsPending}
-          onSettingsChange={handleSettingsChange}
-          onBack={handleBack}
-        />
-        {busyState ? <LoadingOverlay label={busyState.label} detail={busyState.detail} /> : null}
-      </>
+      <ReaderView
+        book={selectedBook}
+        settings={settings}
+        onBack={handleBack}
+      />
+    );
+  }
+
+  if (view === 'detail' && selectedBook) {
+    return (
+      <DetailView
+        book={selectedBook}
+        onOpen={handleOpenReader}
+        onDelete={handleDeleteFromDetail}
+        onBack={handleDetailBack}
+      />
     );
   }
 
@@ -140,11 +155,25 @@ export default function Home() {
       <LibraryView
         books={books}
         progressMap={progressMap}
-        onOpen={handleOpen}
-        onDelete={handleDelete}
+        onSelect={handleSelectBook}
+        onDelete={handleDeleteFromLibrary}
         onFilesSelected={handleFilesSelected}
+        onSettingsOpen={() => setShowLibrarySettings(true)}
       />
-      {busyState ? <LoadingOverlay label={busyState.label} detail={busyState.detail} /> : null}
+      {isBusy && (
+        <LoadingOverlay
+          label={busyLabel}
+          detail="대용량 텍스트를 분석하고 서재에 저장하고 있습니다."
+        />
+      )}
+      {showLibrarySettings && (
+        <SettingsPanel
+          settings={settings}
+          isApplying={false}
+          onSettingsChange={handleSettingsChange}
+          onClose={() => setShowLibrarySettings(false)}
+        />
+      )}
     </>
   );
 }
