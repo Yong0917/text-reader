@@ -49,7 +49,9 @@ export default function DetailView({ book, onOpen, onDelete, onBack }: DetailVie
 
   useEffect(() => {
     getProgress(book.id).then((prog) => {
-      if (prog && prog.scrollHeight > 0) {
+      if (prog?.scrollRatio !== undefined) {
+        setProgress(Math.min(100, Math.max(0, prog.scrollRatio * 100)));
+      } else if (prog && prog.scrollHeight > 0) {
         const viewH = typeof window !== 'undefined' ? window.innerHeight : 800;
         const pct = Math.min(100, Math.max(0, (prog.scrollTop / (prog.scrollHeight - viewH)) * 100));
         setProgress(pct);

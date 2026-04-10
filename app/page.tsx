@@ -28,8 +28,7 @@ export default function Home() {
 
   const [view, setView] = useState<View>('library');
   const [selectedBook, setSelectedBook] = useState<BookFile | null>(null);
-  const [initialParaIndex, setInitialParaIndex] = useState(0);
-  const [initialParaOffsetRatio, setInitialParaOffsetRatio] = useState(0);
+  const [initialScrollRatio, setInitialScrollRatio] = useState(0);
   const [initialAvgParaHeight, setInitialAvgParaHeight] = useState(80);
   const [showLibrarySettings, setShowLibrarySettings] = useState(false);
 
@@ -41,7 +40,9 @@ export default function Home() {
     await Promise.all(
       all.map(async (book) => {
         const prog = await getProgress(book.id);
-        if (prog && prog.scrollHeight > 0) {
+        if (prog?.scrollRatio !== undefined) {
+          map[book.id] = Math.min(100, Math.max(0, prog.scrollRatio * 100));
+        } else if (prog && prog.scrollHeight > 0) {
           map[book.id] = Math.min(100, (prog.scrollTop / (prog.scrollHeight - window.innerHeight)) * 100);
         } else {
           map[book.id] = 0;
@@ -87,8 +88,7 @@ export default function Home() {
       getProgress(selectedBook.id),
       updateBookLastRead(selectedBook.id),
     ]);
-    setInitialParaIndex(prog?.paraIndex ?? 0);
-    setInitialParaOffsetRatio(prog?.paraOffsetRatio ?? 0);
+    setInitialScrollRatio(prog?.scrollRatio ?? 0);
     setInitialAvgParaHeight(prog?.avgParaHeight ?? 80);
     setView('reader');
   }, [selectedBook]);
@@ -143,8 +143,7 @@ export default function Home() {
       <ReaderView
         book={selectedBook}
         settings={settings}
-        initialParaIndex={initialParaIndex}
-        initialParaOffsetRatio={initialParaOffsetRatio}
+        initialScrollRatio={initialScrollRatio}
         avgParaHeight={initialAvgParaHeight}
         onBack={handleBack}
       />

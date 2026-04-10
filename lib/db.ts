@@ -14,6 +14,7 @@ interface ReadingProgress {
   fileId: string;
   scrollTop: number;
   scrollHeight: number;
+  scrollRatio?: number;
   paraIndex?: number;      // first visible paragraph index (pixel-independent)
   paraOffsetRatio?: number; // progress within the paragraph for exact restoration
   avgParaHeight?: number;  // measured average paragraph height for this device/settings
@@ -142,6 +143,7 @@ export async function saveProgress(
   fileId: string,
   scrollTop: number,
   scrollHeight: number,
+  scrollRatio?: number,
   paraIndex?: number,
   avgParaHeight?: number,
   paraOffsetRatio?: number
@@ -151,6 +153,7 @@ export async function saveProgress(
     fileId,
     scrollTop,
     scrollHeight,
+    scrollRatio,
     paraIndex,
     avgParaHeight,
     paraOffsetRatio,

@@ -17,8 +17,7 @@ import BookmarkPanel from './BookmarkPanel';
 interface ReaderViewProps {
   book: BookFile;
   settings: Settings;
-  initialParaIndex?: number;
-  initialParaOffsetRatio?: number;
+  initialScrollRatio?: number;
   avgParaHeight?: number;
   onBack: () => void;
 }
@@ -63,17 +62,29 @@ function clampRatio(value: number) {
   return Math.min(1, Math.max(0, value));
 }
 
+function getScrollMetrics(element: HTMLDivElement) {
+  const maxScrollTop = Math.max(element.scrollHeight - element.clientHeight, 0);
+  const scrollRatio = maxScrollTop > 0 ? clampRatio(element.scrollTop / maxScrollTop) : 0;
+  return {
+    scrollTop: element.scrollTop,
+    scrollHeight: element.scrollHeight,
+    maxScrollTop,
+    scrollRatio,
+  };
+}
+
 export default function ReaderView({
   book,
   settings,
-  initialParaIndex = 0,
-  initialParaOffsetRatio = 0,
+  initialScrollRatio = 0,
   avgParaHeight = 80,
   onBack,
 }: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restoreAttempts = useRef(0);
 
   const [showSearch, setShowSearch] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
@@ -99,16 +110,13 @@ export default function ReaderView({
     overscan: 30,
     paddingStart: PADDING_TOP,
     paddingEnd: PADDING_BOTTOM,
-    initialOffset:
-      initialParaIndex > 0 || initialParaOffsetRatio > 0
-        ? initialParaIndex * estimatedHeight + estimatedHeight * clampRatio(initialParaOffsetRatio) + PADDING_TOP
-        : 0,
+    initialOffset: clampRatio(initialScrollRatio) * Math.max(paragraphs.length * estimatedHeight + PADDING_TOP + PADDING_BOTTOM, 0),
   });
 
   const persistProgress = useCallback(async () => {
     if (!scrollRef.current) return;
 
-    const { scrollTop, scrollHeight: sh } = scrollRef.current;
+    const { scrollTop, scrollHeight: sh, scrollRatio } = getScrollMetrics(scrollRef.current);
     const visibleItems = virtualizer.getVirtualItems().filter((item) => item.index < paragraphs.length);
     const firstVisible = visibleItems[0];
     const measuredAvg = visibleItems.length > 0
@@ -118,30 +126,59 @@ export default function ReaderView({
       ? clampRatio((scrollTop - firstVisible.start) / Math.max(firstVisible.size, 1))
       : 0;
 
-    await saveProgress(book.id, scrollTop, sh, firstVisible?.index, measuredAvg, paraOffsetRatio);
+    await saveProgress(book.id, scrollTop, sh, scrollRatio, firstVisible?.index, measuredAvg, paraOffsetRatio);
   }, [book.id, estimatedHeight, paragraphs.length, virtualizer]);
 
-  // initialOffset is only an estimate. After measurement, restore to the exact
-  // paragraph and then apply the saved intra-paragraph offset.
   const hasRestoredScroll = useRef(false);
+  const restoreScrollPosition = useCallback(() => {
+    if (hasRestoredScroll.current || !scrollRef.current) return;
+
+    const targetRatio = clampRatio(initialScrollRatio);
+    if (targetRatio <= 0) {
+      hasRestoredScroll.current = true;
+      return;
+    }
+
+    const { maxScrollTop } = getScrollMetrics(scrollRef.current);
+    if (maxScrollTop <= 0) return;
+
+    scrollRef.current.scrollTop = targetRatio * maxScrollTop;
+    const { scrollRatio } = getScrollMetrics(scrollRef.current);
+    if (Math.abs(scrollRatio - targetRatio) < 0.01 || restoreAttempts.current >= 8) {
+      hasRestoredScroll.current = true;
+    }
+  }, [initialScrollRatio]);
+
   useEffect(() => {
-    if (hasRestoredScroll.current || (initialParaIndex === 0 && initialParaOffsetRatio === 0)) return;
+    if (hasRestoredScroll.current) return;
+
+    const runRestore = () => {
+      restoreAttempts.current += 1;
+      restoreScrollPosition();
+      if (!hasRestoredScroll.current && restoreAttempts.current < 8) {
+        restoreTimer.current = setTimeout(runRestore, 80);
+      }
+    };
+
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (!hasRestoredScroll.current) {
-          virtualizer.scrollToIndex(initialParaIndex, { align: 'start' });
-          requestAnimationFrame(() => {
-            const anchorItem = virtualizer.getVirtualItems().find((item) => item.index === initialParaIndex);
-            if (anchorItem && scrollRef.current) {
-              scrollRef.current.scrollTop = anchorItem.start + anchorItem.size * clampRatio(initialParaOffsetRatio);
-            }
-          });
-          hasRestoredScroll.current = true;
-        }
-      });
+      requestAnimationFrame(runRestore);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+
+    const handleResize = () => {
+      if (!hasRestoredScroll.current) {
+        restoreScrollPosition();
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.visualViewport?.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.visualViewport?.removeEventListener('resize', handleResize);
+      if (restoreTimer.current) clearTimeout(restoreTimer.current);
+    };
+  }, [restoreScrollPosition]);
 
   // Use Set for O(1) match lookup during rendering
   const matchIndices = useMemo(() => {
@@ -167,11 +204,8 @@ export default function ReaderView({
   }, [currentMatchIndex, matchIndices]);
 
   // Set initial progress display and load bookmarks
-  // Scroll position is already set via virtualizer initialOffset (no async race)
   useEffect(() => {
-    if (initialParaIndex > 0 && paragraphs.length > 0) {
-      setReadProgress(Math.min(100, (initialParaIndex / paragraphs.length) * 100));
-    }
+    setReadProgress(Math.min(100, Math.max(0, initialScrollRatio * 100)));
     loadBookmarks();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);
@@ -182,10 +216,10 @@ export default function ReaderView({
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
-    const { scrollTop, scrollHeight: sh } = scrollRef.current;
+    const { scrollTop, scrollHeight: sh, scrollRatio } = getScrollMetrics(scrollRef.current);
     setCurrentScrollTop(scrollTop);
     setScrollHeight(sh);
-    setReadProgress(Math.min(100, Math.max(0, (scrollTop / (sh - window.innerHeight)) * 100)));
+    setReadProgress(Math.min(100, Math.max(0, scrollRatio * 100)));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       void persistProgress();
@@ -218,6 +252,7 @@ export default function ReaderView({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilitySave);
       window.removeEventListener('pagehide', handlePageHide);
+      if (restoreTimer.current) clearTimeout(restoreTimer.current);
       if (barTimer.current) clearTimeout(barTimer.current);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       void persistProgress();
