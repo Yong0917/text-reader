@@ -25,6 +25,14 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
   const renderingRef = useRef<Set<number>>(new Set());
   const initialScrollDone = useRef(false);
   const pinchActiveRef = useRef(false);
+  const dragPanRef = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    startScrollLeft: 0,
+    startScrollTop: 0,
+  });
 
   // PDF 로드 및 페이지 렌더링
   useEffect(() => {
@@ -174,6 +182,17 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
         startZoom = zoomRef.current;
         currentPinchZoom = startZoom;
         pinchActiveRef.current = true;
+        dragPanRef.current.active = false;
+        dragPanRef.current.moved = true;
+      } else if (e.touches.length === 1 && zoomRef.current > 1) {
+        dragPanRef.current = {
+          active: true,
+          moved: false,
+          startX: e.touches[0].clientX,
+          startY: e.touches[0].clientY,
+          startScrollLeft: el.scrollLeft,
+          startScrollTop: el.scrollTop,
+        };
       }
     };
 
@@ -190,6 +209,21 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
           contentRef.current.style.transform = `scale(${relativeScale})`;
           contentRef.current.style.transformOrigin = 'top center';
         }
+        return;
+      }
+
+      if (e.touches.length === 1 && dragPanRef.current.active && zoomRef.current > 1) {
+        const dx = e.touches[0].clientX - dragPanRef.current.startX;
+        const dy = e.touches[0].clientY - dragPanRef.current.startY;
+
+        if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+          dragPanRef.current.moved = true;
+          pinchActiveRef.current = true;
+        }
+
+        e.preventDefault();
+        el.scrollLeft = dragPanRef.current.startScrollLeft - dx;
+        el.scrollTop = dragPanRef.current.startScrollTop - dy;
       }
     };
 
@@ -205,6 +239,18 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
         zoomRef.current = snapped;
         setZoomLevel(snapped);
         setTimeout(() => { pinchActiveRef.current = false; }, 100);
+        dragPanRef.current.active = false;
+        return;
+      }
+
+      if (e.touches.length === 0) {
+        dragPanRef.current.active = false;
+        if (dragPanRef.current.moved) {
+          setTimeout(() => {
+            pinchActiveRef.current = false;
+            dragPanRef.current.moved = false;
+          }, 100);
+        }
       }
     };
 
@@ -354,8 +400,17 @@ export default function PdfReaderView({ book, onBack }: PdfReaderViewProps) {
         className="flex-1 overflow-auto"
         onScroll={handleScroll}
         onClick={handleTap}
+        style={{ touchAction: zoomLevel > 1 ? 'none' : 'manipulation' }}
       >
-        <div ref={contentRef} className="flex flex-col items-center gap-2 py-4 pt-16">
+        <div
+          ref={contentRef}
+          className="flex flex-col items-center gap-2 py-4 pt-16"
+          style={{
+            width: zoomLevel > 1 ? 'fit-content' : '100%',
+            minWidth: '100%',
+            margin: '0 auto',
+          }}
+        >
           {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
             <div
               key={pageNum}
