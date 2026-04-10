@@ -90,16 +90,15 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, avgPa
     initialOffset: initialParaIndex > 0 ? initialParaIndex * estimatedHeight + PADDING_TOP : 0,
   });
 
-  // iOS Safari backup: scrollTop set in useLayoutEffect can get reset on first layout.
-  // Double rAF runs after the first paint when the element is fully sized.
+  // initialOffset 이후 첫 페인트가 끝나면 scrollToIndex로 정확한 단락 위치로 보정.
+  // scrollToIndex는 virtualizer 내부 추정값 기준으로 이동하므로 세션 간 측정값 차이에 영향받지 않음.
   const hasRestoredScroll = useRef(false);
   useEffect(() => {
     if (hasRestoredScroll.current || initialParaIndex === 0) return;
-    const targetScrollTop = initialParaIndex * estimatedHeight + PADDING_TOP;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        if (scrollRef.current && !hasRestoredScroll.current) {
-          scrollRef.current.scrollTop = targetScrollTop;
+        if (!hasRestoredScroll.current) {
+          virtualizer.scrollToIndex(initialParaIndex, { align: 'start' });
           hasRestoredScroll.current = true;
         }
       });
