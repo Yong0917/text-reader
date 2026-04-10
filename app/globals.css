@@ -73,6 +73,17 @@ body {
   }
 }
 
+@keyframes slide-in-right {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
 .animate-fade-in-up {
   animation: fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -85,8 +96,20 @@ body {
   animation: fade-in 0.25s ease-out both;
 }
 
+.animate-slide-in-right {
+  animation: slide-in-right 0.26s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
 .loading-bar {
   animation: loading-bar 1.05s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ── Reader paragraph — CSS variable-driven for zero-rerender perf ── */
+.reader-para {
+  font-size: var(--reader-font-size, 17px);
+  line-height: var(--reader-line-height, 1.8);
+  font-family: var(--reader-font-family, inherit);
+  margin-bottom: 1.25rem;
 }
 
 /* ── Reader Gradients ─────────────────────────── */
