@@ -19,6 +19,7 @@ interface ReaderViewProps {
   book: BookFile;
   settings: Settings;
   initialParaIndex?: number;
+  avgParaHeight?: number;
   onBack: () => void;
 }
 
@@ -57,7 +58,7 @@ function ToolBtn({ onClick, children, className = '' }: {
 const PADDING_TOP = 80;
 const PADDING_BOTTOM = 128;
 
-export default function ReaderView({ book, settings, initialParaIndex = 0, onBack }: ReaderViewProps) {
+export default function ReaderView({ book, settings, initialParaIndex = 0, avgParaHeight = 80, onBack }: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -76,16 +77,35 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, onBac
   const paragraphs = useMemo(() => book.content.split(/\n+/).filter((p) => p.trim()), [book.content]);
 
   // +1 for the footer item
+  // estimateSize uses the stored average paragraph height for this device (reduces position error)
   // initialOffset positions the virtualizer from the very first render (no async delay)
+  const estimatedHeight = avgParaHeight;
   const virtualizer = useVirtualizer({
     count: paragraphs.length + 1,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 80,
+    estimateSize: () => estimatedHeight,
     overscan: 30,
     paddingStart: PADDING_TOP,
     paddingEnd: PADDING_BOTTOM,
-    initialOffset: initialParaIndex > 0 ? initialParaIndex * 80 + PADDING_TOP : 0,
+    initialOffset: initialParaIndex > 0 ? initialParaIndex * estimatedHeight + PADDING_TOP : 0,
   });
+
+  // iOS Safari backup: scrollTop set in useLayoutEffect can get reset on first layout.
+  // Double rAF runs after the first paint when the element is fully sized.
+  const hasRestoredScroll = useRef(false);
+  useEffect(() => {
+    if (hasRestoredScroll.current || initialParaIndex === 0) return;
+    const targetScrollTop = initialParaIndex * estimatedHeight + PADDING_TOP;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (scrollRef.current && !hasRestoredScroll.current) {
+          scrollRef.current.scrollTop = targetScrollTop;
+          hasRestoredScroll.current = true;
+        }
+      });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Use Set for O(1) match lookup during rendering
   const matchIndices = useMemo(() => {
@@ -132,10 +152,13 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, onBac
     setReadProgress(Math.min(100, Math.max(0, (scrollTop / (sh - window.innerHeight)) * 100)));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      // Save first visible paragraph index for pixel-independent restoration
-      const firstVisible = virtualizer.getVirtualItems()
-        .find((item) => item.index < paragraphs.length)?.index;
-      saveProgress(book.id, scrollTop, sh, firstVisible);
+      const visibleItems = virtualizer.getVirtualItems().filter((item) => item.index < paragraphs.length);
+      const firstVisible = visibleItems[0]?.index;
+      // Measure actual average paragraph height from visible items for accurate future restoration
+      const measuredAvg = visibleItems.length > 0
+        ? Math.round(visibleItems.reduce((sum, item) => sum + item.size, 0) / visibleItems.length)
+        : estimatedHeight;
+      saveProgress(book.id, scrollTop, sh, firstVisible, measuredAvg);
     }, 500);
   }, [book.id, virtualizer, paragraphs.length]);
 

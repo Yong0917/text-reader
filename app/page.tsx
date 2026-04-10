@@ -29,6 +29,7 @@ export default function Home() {
   const [view, setView] = useState<View>('library');
   const [selectedBook, setSelectedBook] = useState<BookFile | null>(null);
   const [initialParaIndex, setInitialParaIndex] = useState(0);
+  const [initialAvgParaHeight, setInitialAvgParaHeight] = useState(80);
   const [showLibrarySettings, setShowLibrarySettings] = useState(false);
 
   const loadBooks = useCallback(async () => {
@@ -86,6 +87,7 @@ export default function Home() {
       updateBookLastRead(selectedBook.id),
     ]);
     setInitialParaIndex(prog?.paraIndex ?? 0);
+    setInitialAvgParaHeight(prog?.avgParaHeight ?? 80);
     setView('reader');
   }, [selectedBook]);
 
@@ -140,6 +142,7 @@ export default function Home() {
         book={selectedBook}
         settings={settings}
         initialParaIndex={initialParaIndex}
+        avgParaHeight={initialAvgParaHeight}
         onBack={handleBack}
       />
     );
