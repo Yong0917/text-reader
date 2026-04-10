@@ -6,7 +6,6 @@ import {
   BookFile,
   Bookmark,
   saveProgress,
-  getProgress,
   addBookmark,
   removeBookmark,
   getBookmarksByFile,
@@ -19,6 +18,7 @@ interface ReaderViewProps {
   book: BookFile;
   settings: Settings;
   initialParaIndex?: number;
+  initialParaOffsetRatio?: number;
   avgParaHeight?: number;
   onBack: () => void;
 }
@@ -58,7 +58,19 @@ function ToolBtn({ onClick, children, className = '' }: {
 const PADDING_TOP = 80;
 const PADDING_BOTTOM = 128;
 
-export default function ReaderView({ book, settings, initialParaIndex = 0, avgParaHeight = 80, onBack }: ReaderViewProps) {
+function clampRatio(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
+export default function ReaderView({
+  book,
+  settings,
+  initialParaIndex = 0,
+  initialParaOffsetRatio = 0,
+  avgParaHeight = 80,
+  onBack,
+}: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,18 +99,43 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, avgPa
     overscan: 30,
     paddingStart: PADDING_TOP,
     paddingEnd: PADDING_BOTTOM,
-    initialOffset: initialParaIndex > 0 ? initialParaIndex * estimatedHeight + PADDING_TOP : 0,
+    initialOffset:
+      initialParaIndex > 0 || initialParaOffsetRatio > 0
+        ? initialParaIndex * estimatedHeight + estimatedHeight * clampRatio(initialParaOffsetRatio) + PADDING_TOP
+        : 0,
   });
 
-  // initialOffset 이후 첫 페인트가 끝나면 scrollToIndex로 정확한 단락 위치로 보정.
-  // scrollToIndex는 virtualizer 내부 추정값 기준으로 이동하므로 세션 간 측정값 차이에 영향받지 않음.
+  const persistProgress = useCallback(() => {
+    if (!scrollRef.current) return;
+
+    const { scrollTop, scrollHeight: sh } = scrollRef.current;
+    const visibleItems = virtualizer.getVirtualItems().filter((item) => item.index < paragraphs.length);
+    const firstVisible = visibleItems[0];
+    const measuredAvg = visibleItems.length > 0
+      ? Math.round(visibleItems.reduce((sum, item) => sum + item.size, 0) / visibleItems.length)
+      : estimatedHeight;
+    const paraOffsetRatio = firstVisible
+      ? clampRatio((scrollTop - firstVisible.start) / Math.max(firstVisible.size, 1))
+      : 0;
+
+    void saveProgress(book.id, scrollTop, sh, firstVisible?.index, measuredAvg, paraOffsetRatio);
+  }, [book.id, estimatedHeight, paragraphs.length, virtualizer]);
+
+  // initialOffset is only an estimate. After measurement, restore to the exact
+  // paragraph and then apply the saved intra-paragraph offset.
   const hasRestoredScroll = useRef(false);
   useEffect(() => {
-    if (hasRestoredScroll.current || initialParaIndex === 0) return;
+    if (hasRestoredScroll.current || (initialParaIndex === 0 && initialParaOffsetRatio === 0)) return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (!hasRestoredScroll.current) {
           virtualizer.scrollToIndex(initialParaIndex, { align: 'start' });
+          requestAnimationFrame(() => {
+            const anchorItem = virtualizer.getVirtualItems().find((item) => item.index === initialParaIndex);
+            if (anchorItem && scrollRef.current) {
+              scrollRef.current.scrollTop = anchorItem.start + anchorItem.size * clampRatio(initialParaOffsetRatio);
+            }
+          });
           hasRestoredScroll.current = true;
         }
       });
@@ -151,30 +188,48 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, avgPa
     setReadProgress(Math.min(100, Math.max(0, (scrollTop / (sh - window.innerHeight)) * 100)));
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      const visibleItems = virtualizer.getVirtualItems().filter((item) => item.index < paragraphs.length);
-      const firstVisible = visibleItems[0]?.index;
-      // Measure actual average paragraph height from visible items for accurate future restoration
-      const measuredAvg = visibleItems.length > 0
-        ? Math.round(visibleItems.reduce((sum, item) => sum + item.size, 0) / visibleItems.length)
-        : estimatedHeight;
-      saveProgress(book.id, scrollTop, sh, firstVisible, measuredAvg);
+      persistProgress();
     }, 500);
-  }, [book.id, virtualizer, paragraphs.length]);
+  }, [persistProgress]);
 
   const handleTap = useCallback(() => {
     if (showSearch || showBookmarks) return;
     setShowBar((prev) => !prev);
     if (barTimer.current) clearTimeout(barTimer.current);
     barTimer.current = setTimeout(() => setShowBar(false), 3000);
-  }, [showBookmarks]);
+  }, [showBookmarks, showSearch]);
 
   useEffect(() => {
     barTimer.current = setTimeout(() => setShowBar(false), 3000);
+    const handleVisibilitySave = () => {
+      if (document.visibilityState === 'hidden') {
+        if (saveTimer.current) clearTimeout(saveTimer.current);
+        persistProgress();
+      }
+    };
+    const handlePageHide = () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      persistProgress();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilitySave);
+    window.addEventListener('pagehide', handlePageHide);
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilitySave);
+      window.removeEventListener('pagehide', handlePageHide);
       if (barTimer.current) clearTimeout(barTimer.current);
       if (saveTimer.current) clearTimeout(saveTimer.current);
+      persistProgress();
     };
-  }, []);
+  }, [persistProgress]);
+
+  const handleBackClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    persistProgress();
+    onBack();
+  }, [onBack, persistProgress]);
 
   const handleAddBookmark = useCallback(async () => {
     if (!scrollRef.current) return;
@@ -244,7 +299,7 @@ export default function ReaderView({ book, settings, initialParaIndex = 0, avgPa
         } ${theme.panel} border-b ${theme.border}`}
       >
         <div className="flex items-center gap-1 px-3 py-2.5">
-          <ToolBtn onClick={(e) => { e.stopPropagation(); onBack(); }} className={iconColor}>
+          <ToolBtn onClick={handleBackClick} className={iconColor}>
             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
             </svg>

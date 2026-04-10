@@ -29,6 +29,7 @@ export default function Home() {
   const [view, setView] = useState<View>('library');
   const [selectedBook, setSelectedBook] = useState<BookFile | null>(null);
   const [initialParaIndex, setInitialParaIndex] = useState(0);
+  const [initialParaOffsetRatio, setInitialParaOffsetRatio] = useState(0);
   const [initialAvgParaHeight, setInitialAvgParaHeight] = useState(80);
   const [showLibrarySettings, setShowLibrarySettings] = useState(false);
 
@@ -87,6 +88,7 @@ export default function Home() {
       updateBookLastRead(selectedBook.id),
     ]);
     setInitialParaIndex(prog?.paraIndex ?? 0);
+    setInitialParaOffsetRatio(prog?.paraOffsetRatio ?? 0);
     setInitialAvgParaHeight(prog?.avgParaHeight ?? 80);
     setView('reader');
   }, [selectedBook]);
@@ -142,6 +144,7 @@ export default function Home() {
         book={selectedBook}
         settings={settings}
         initialParaIndex={initialParaIndex}
+        initialParaOffsetRatio={initialParaOffsetRatio}
         avgParaHeight={initialAvgParaHeight}
         onBack={handleBack}
       />
