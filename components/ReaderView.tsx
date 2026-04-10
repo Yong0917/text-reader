@@ -85,6 +85,8 @@ export default function ReaderView({
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restoreAttempts = useRef(0);
+  const lastKnownScrollRatio = useRef(clampRatio(initialScrollRatio));
+  const isApplyingScrollRestore = useRef(false);
 
   const [showSearch, setShowSearch] = useState(false);
   const [showBookmarks, setShowBookmarks] = useState(false);
@@ -117,6 +119,7 @@ export default function ReaderView({
     if (!scrollRef.current) return;
 
     const { scrollTop, scrollHeight: sh, scrollRatio } = getScrollMetrics(scrollRef.current);
+    lastKnownScrollRatio.current = scrollRatio;
     const visibleItems = virtualizer.getVirtualItems().filter((item) => item.index < paragraphs.length);
     const firstVisible = visibleItems[0];
     const measuredAvg = visibleItems.length > 0
@@ -130,31 +133,43 @@ export default function ReaderView({
   }, [book.id, estimatedHeight, paragraphs.length, virtualizer]);
 
   const hasRestoredScroll = useRef(false);
-  const restoreScrollPosition = useCallback(() => {
+  const applyScrollRatio = useCallback((targetRatio: number) => {
+    if (!scrollRef.current) return false;
+
+    const safeTargetRatio = clampRatio(targetRatio);
+    const { maxScrollTop } = getScrollMetrics(scrollRef.current);
+    if (maxScrollTop <= 0) return;
+
+    isApplyingScrollRestore.current = true;
+    scrollRef.current.scrollTop = safeTargetRatio * maxScrollTop;
+    const { scrollRatio } = getScrollMetrics(scrollRef.current);
+    lastKnownScrollRatio.current = scrollRatio;
+    requestAnimationFrame(() => {
+      isApplyingScrollRestore.current = false;
+    });
+    return Math.abs(scrollRatio - safeTargetRatio) < 0.01;
+  }, []);
+
+  const restoreScrollPosition = useCallback((targetRatio: number) => {
     if (hasRestoredScroll.current || !scrollRef.current) return;
 
-    const targetRatio = clampRatio(initialScrollRatio);
-    if (targetRatio <= 0) {
+    const safeTargetRatio = clampRatio(targetRatio);
+    if (safeTargetRatio <= 0) {
       hasRestoredScroll.current = true;
       return;
     }
 
-    const { maxScrollTop } = getScrollMetrics(scrollRef.current);
-    if (maxScrollTop <= 0) return;
-
-    scrollRef.current.scrollTop = targetRatio * maxScrollTop;
-    const { scrollRatio } = getScrollMetrics(scrollRef.current);
-    if (Math.abs(scrollRatio - targetRatio) < 0.01 || restoreAttempts.current >= 8) {
+    if (applyScrollRatio(safeTargetRatio) || restoreAttempts.current >= 8) {
       hasRestoredScroll.current = true;
     }
-  }, [initialScrollRatio]);
+  }, [applyScrollRatio]);
 
   useEffect(() => {
     if (hasRestoredScroll.current) return;
 
     const runRestore = () => {
       restoreAttempts.current += 1;
-      restoreScrollPosition();
+      restoreScrollPosition(initialScrollRatio);
       if (!hasRestoredScroll.current && restoreAttempts.current < 8) {
         restoreTimer.current = setTimeout(runRestore, 80);
       }
@@ -166,7 +181,7 @@ export default function ReaderView({
 
     const handleResize = () => {
       if (!hasRestoredScroll.current) {
-        restoreScrollPosition();
+        restoreScrollPosition(initialScrollRatio);
       }
     };
 
@@ -178,7 +193,7 @@ export default function ReaderView({
       window.visualViewport?.removeEventListener('resize', handleResize);
       if (restoreTimer.current) clearTimeout(restoreTimer.current);
     };
-  }, [restoreScrollPosition]);
+  }, [initialScrollRatio, restoreScrollPosition]);
 
   // Use Set for O(1) match lookup during rendering
   const matchIndices = useMemo(() => {
@@ -217,6 +232,9 @@ export default function ReaderView({
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
     const { scrollTop, scrollHeight: sh, scrollRatio } = getScrollMetrics(scrollRef.current);
+    if (isApplyingScrollRestore.current) return;
+
+    lastKnownScrollRatio.current = scrollRatio;
     setCurrentScrollTop(scrollTop);
     setScrollHeight(sh);
     setReadProgress(Math.min(100, Math.max(0, scrollRatio * 100)));
@@ -239,25 +257,49 @@ export default function ReaderView({
       if (document.visibilityState === 'hidden') {
         if (saveTimer.current) clearTimeout(saveTimer.current);
         void persistProgress();
+      } else {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            applyScrollRatio(lastKnownScrollRatio.current);
+          });
+        });
       }
     };
     const handlePageHide = () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       void persistProgress();
     };
+    const handlePageShow = () => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          applyScrollRatio(lastKnownScrollRatio.current);
+        });
+      });
+    };
+    const handleViewportResize = () => {
+      requestAnimationFrame(() => {
+        applyScrollRatio(lastKnownScrollRatio.current);
+      });
+    };
 
     document.addEventListener('visibilitychange', handleVisibilitySave);
     window.addEventListener('pagehide', handlePageHide);
+    window.addEventListener('pageshow', handlePageShow);
+    window.addEventListener('resize', handleViewportResize);
+    window.visualViewport?.addEventListener('resize', handleViewportResize);
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilitySave);
       window.removeEventListener('pagehide', handlePageHide);
+      window.removeEventListener('pageshow', handlePageShow);
+      window.removeEventListener('resize', handleViewportResize);
+      window.visualViewport?.removeEventListener('resize', handleViewportResize);
       if (restoreTimer.current) clearTimeout(restoreTimer.current);
       if (barTimer.current) clearTimeout(barTimer.current);
       if (saveTimer.current) clearTimeout(saveTimer.current);
       void persistProgress();
     };
-  }, [persistProgress]);
+  }, [applyScrollRatio, persistProgress]);
 
   const handleBackClick = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation();
