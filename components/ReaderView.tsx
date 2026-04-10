@@ -18,6 +18,7 @@ import BookmarkPanel from './BookmarkPanel';
 interface ReaderViewProps {
   book: BookFile;
   settings: Settings;
+  initialParaIndex?: number;
   onBack: () => void;
 }
 
@@ -56,7 +57,7 @@ function ToolBtn({ onClick, children, className = '' }: {
 const PADDING_TOP = 80;
 const PADDING_BOTTOM = 128;
 
-export default function ReaderView({ book, settings, onBack }: ReaderViewProps) {
+export default function ReaderView({ book, settings, initialParaIndex = 0, onBack }: ReaderViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const barTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -75,6 +76,7 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
   const paragraphs = useMemo(() => book.content.split(/\n+/).filter((p) => p.trim()), [book.content]);
 
   // +1 for the footer item
+  // initialOffset positions the virtualizer from the very first render (no async delay)
   const virtualizer = useVirtualizer({
     count: paragraphs.length + 1,
     getScrollElement: () => scrollRef.current,
@@ -82,6 +84,7 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
     overscan: 30,
     paddingStart: PADDING_TOP,
     paddingEnd: PADDING_BOTTOM,
+    initialOffset: initialParaIndex > 0 ? initialParaIndex * 80 + PADDING_TOP : 0,
   });
 
   // Use Set for O(1) match lookup during rendering
@@ -107,22 +110,12 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMatchIndex, matchIndices]);
 
-  // Restore scroll position on mount
+  // Set initial progress display and load bookmarks
+  // Scroll position is already set via virtualizer initialOffset (no async race)
   useEffect(() => {
-    getProgress(book.id).then((prog) => {
-      if (!prog) return;
-      if (prog.paraIndex !== undefined && prog.paraIndex > 0) {
-        // Accurate: jump directly to saved paragraph index
-        virtualizer.scrollToIndex(prog.paraIndex, { align: 'start' });
-        setReadProgress(Math.min(100, (prog.paraIndex / paragraphs.length) * 100));
-      } else if (prog.scrollHeight > 0) {
-        // Fallback for old saves: ratio-based approximation
-        const ratio = prog.scrollTop / prog.scrollHeight;
-        setReadProgress(Math.min(100, ratio * 100));
-        const targetIndex = Math.round(ratio * paragraphs.length);
-        if (targetIndex > 0) virtualizer.scrollToIndex(targetIndex, { align: 'start' });
-      }
-    });
+    if (initialParaIndex > 0 && paragraphs.length > 0) {
+      setReadProgress(Math.min(100, (initialParaIndex / paragraphs.length) * 100));
+    }
     loadBookmarks();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [book.id]);

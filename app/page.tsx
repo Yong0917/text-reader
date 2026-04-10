@@ -28,6 +28,7 @@ export default function Home() {
 
   const [view, setView] = useState<View>('library');
   const [selectedBook, setSelectedBook] = useState<BookFile | null>(null);
+  const [initialParaIndex, setInitialParaIndex] = useState(0);
   const [showLibrarySettings, setShowLibrarySettings] = useState(false);
 
   const loadBooks = useCallback(async () => {
@@ -80,7 +81,11 @@ export default function Home() {
   // 상세 → 리더
   const handleOpenReader = useCallback(async () => {
     if (!selectedBook) return;
-    await updateBookLastRead(selectedBook.id);
+    const [prog] = await Promise.all([
+      getProgress(selectedBook.id),
+      updateBookLastRead(selectedBook.id),
+    ]);
+    setInitialParaIndex(prog?.paraIndex ?? 0);
     setView('reader');
   }, [selectedBook]);
 
@@ -134,6 +139,7 @@ export default function Home() {
       <ReaderView
         book={selectedBook}
         settings={settings}
+        initialParaIndex={initialParaIndex}
         onBack={handleBack}
       />
     );
