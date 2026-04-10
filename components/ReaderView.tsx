@@ -110,13 +110,17 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
   // Restore scroll position on mount
   useEffect(() => {
     getProgress(book.id).then((prog) => {
-      if (prog && prog.scrollHeight > 0) {
+      if (!prog) return;
+      if (prog.paraIndex !== undefined && prog.paraIndex > 0) {
+        // Accurate: jump directly to saved paragraph index
+        virtualizer.scrollToIndex(prog.paraIndex, { align: 'start' });
+        setReadProgress(Math.min(100, (prog.paraIndex / paragraphs.length) * 100));
+      } else if (prog.scrollHeight > 0) {
+        // Fallback for old saves: ratio-based approximation
         const ratio = prog.scrollTop / prog.scrollHeight;
         setReadProgress(Math.min(100, ratio * 100));
         const targetIndex = Math.round(ratio * paragraphs.length);
-        if (targetIndex > 0) {
-          virtualizer.scrollToIndex(targetIndex, { align: 'start' });
-        }
+        if (targetIndex > 0) virtualizer.scrollToIndex(targetIndex, { align: 'start' });
       }
     });
     loadBookmarks();
@@ -134,8 +138,13 @@ export default function ReaderView({ book, settings, onBack }: ReaderViewProps) 
     setScrollHeight(sh);
     setReadProgress(Math.min(100, Math.max(0, (scrollTop / (sh - window.innerHeight)) * 100)));
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => saveProgress(book.id, scrollTop, sh), 500);
-  }, [book.id]);
+    saveTimer.current = setTimeout(() => {
+      // Save first visible paragraph index for pixel-independent restoration
+      const firstVisible = virtualizer.getVirtualItems()
+        .find((item) => item.index < paragraphs.length)?.index;
+      saveProgress(book.id, scrollTop, sh, firstVisible);
+    }, 500);
+  }, [book.id, virtualizer, paragraphs.length]);
 
   const handleTap = useCallback(() => {
     if (showSearch || showBookmarks) return;

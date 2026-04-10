@@ -14,6 +14,7 @@ interface ReadingProgress {
   fileId: string;
   scrollTop: number;
   scrollHeight: number;
+  paraIndex?: number;   // first visible paragraph index (pixel-independent)
   updatedAt: number;
 }
 
@@ -135,9 +136,9 @@ export async function deleteBook(id: string): Promise<void> {
   await Promise.all(bookmarks.map((b) => db.delete('bookmarks', b.id)));
 }
 
-export async function saveProgress(fileId: string, scrollTop: number, scrollHeight: number): Promise<void> {
+export async function saveProgress(fileId: string, scrollTop: number, scrollHeight: number, paraIndex?: number): Promise<void> {
   const db = await getDB();
-  await db.put('progress', { fileId, scrollTop, scrollHeight, updatedAt: Date.now() });
+  await db.put('progress', { fileId, scrollTop, scrollHeight, paraIndex, updatedAt: Date.now() });
 }
 
 export async function getProgress(fileId: string): Promise<ReadingProgress | undefined> {
