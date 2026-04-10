@@ -2,9 +2,9 @@ export async function parsePdf(file: File): Promise<string> {
   // 동적 임포트 — 클라이언트 전용
   const pdfjsLib = await import('pdfjs-dist');
 
-  // 워커 설정 (Next.js 환경에서 CDN 사용)
+  // 워커 설정 (로컬 파일 사용)
   if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
   }
 
   const arrayBuffer = await file.arrayBuffer();
