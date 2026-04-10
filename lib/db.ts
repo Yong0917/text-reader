@@ -4,6 +4,7 @@ interface BookFile {
   id: string;
   name: string;
   content: string;
+  pdfData?: ArrayBuffer;
   size: number;
   type: string;
   addedAt: number;
@@ -76,11 +77,6 @@ async function extractContent(file: File): Promise<string> {
     return parseEpub(file);
   }
 
-  if (ext === 'pdf') {
-    const { parsePdf } = await import('./parsers/pdf');
-    return parsePdf(file);
-  }
-
   if (ext === 'html' || ext === 'htm') {
     const html = await file.text();
     const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -93,9 +89,26 @@ async function extractContent(file: File): Promise<string> {
 
 export async function saveBook(file: File): Promise<BookFile> {
   const db = await getDB();
-  const content = await extractContent(file);
   const id = `${file.name}-${file.size}-${file.lastModified}`;
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
 
+  if (ext === 'pdf') {
+    const pdfData = await file.arrayBuffer();
+    const book: BookFile = {
+      id,
+      name: file.name,
+      content: '__PDF__',
+      pdfData,
+      size: file.size,
+      type: file.type,
+      addedAt: Date.now(),
+      lastReadAt: Date.now(),
+    };
+    await db.put('books', book);
+    return book;
+  }
+
+  const content = await extractContent(file);
   const book: BookFile = {
     id,
     name: file.name,

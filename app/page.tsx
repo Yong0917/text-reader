@@ -13,6 +13,7 @@ import { getSettings, saveSettings, Settings } from '@/lib/settings';
 import LibraryView from '@/components/LibraryView';
 import DetailView from '@/components/DetailView';
 import ReaderView from '@/components/ReaderView';
+import PdfReaderView from '@/components/PdfReaderView';
 import SettingsPanel from '@/components/SettingsPanel';
 import LoadingOverlay from '@/components/LoadingOverlay';
 
@@ -139,6 +140,10 @@ export default function Home() {
   }
 
   if (view === 'reader' && selectedBook) {
+    const isPdf = selectedBook.content === '__PDF__' && selectedBook.pdfData;
+    if (isPdf) {
+      return <PdfReaderView book={selectedBook} onBack={handleBack} />;
+    }
     return (
       <ReaderView
         book={selectedBook}
